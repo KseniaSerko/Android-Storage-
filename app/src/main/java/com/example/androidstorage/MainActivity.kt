@@ -19,6 +19,14 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
     }
 
+    private fun deletePhotoFromInternalStorage(filename: String): Boolean {
+        return try {
+            deleteFile(filename)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
 
     private suspend fun loadPhotoFromInternalStorage(): List<InternalStoragePhoto> {
         return withContext(Dispatchers.IO) {
