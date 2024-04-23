@@ -1,8 +1,10 @@
 package com.example.androidstorage
 
 import android.Manifest
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
@@ -34,6 +36,8 @@ class MainActivity : AppCompatActivity() {
     private var writePermissionGranted = false
     private lateinit var permissionsLauncher: ActivityResultLauncher<Array<String>>
 
+    private lateinit var contentObserver: ContentObserver
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -52,6 +56,10 @@ class MainActivity : AppCompatActivity() {
         externalStoragePhotoAdapter = SharedPhotoAdapter {
 
         }
+
+        setupExternalStorageRecyclerView()
+        initContentObserver()
+
         permissionsLauncher =
             registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
                 readPermissionGranted =
@@ -97,6 +105,64 @@ class MainActivity : AppCompatActivity() {
 
         setupInternalStorageRecyclerView()
         loadPhotosFromInternalStorageIntoRecyclerView()
+        loadPhotosFromExternalStorageIntoRecyclerView()
+    }
+
+    private fun initContentObserver() {
+        contentObserver = object : ContentObserver(null) {
+            override fun onChange(selfChange: Boolean) {
+                if (readPermissionGranted) {
+                    loadPhotosFromExternalStorageIntoRecyclerView()
+                }
+            }
+        }
+        contentResolver.registerContentObserver(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            true,
+            contentObserver
+        )
+    }
+
+    private suspend fun loadPhotosFromExternalStorage(): List<SharedStoragePhoto> {
+        return withContext(Dispatchers.IO) {
+            val collection = sdk29AndUp {
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } ?: MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+
+            val projection = arrayOf(
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DISPLAY_NAME,
+                MediaStore.Images.Media.WIDTH,
+                MediaStore.Images.Media.HEIGHT,
+            )
+            val photos = mutableListOf<SharedStoragePhoto>()
+            contentResolver.query(
+                collection,
+                projection,
+                null,
+                null,
+                "${MediaStore.Images.Media.DISPLAY_NAME} ASC"
+            )?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+                val displayNameColumn =
+                    cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+                val widthColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
+                val heightColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
+
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idColumn)
+                    val displayName = cursor.getString(displayNameColumn)
+                    val width = cursor.getInt(widthColumn)
+                    val height = cursor.getInt(heightColumn)
+                    val contentUri = ContentUris.withAppendedId(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        id
+                    )
+                    photos.add(SharedStoragePhoto(id, displayName, width, height, contentUri))
+                }
+                photos.toList()
+            } ?: listOf()
+        }
     }
 
     private fun updateOrRequestPermissions() {
@@ -161,10 +227,22 @@ class MainActivity : AppCompatActivity() {
         layoutManager = StaggeredGridLayoutManager(3, RecyclerView.VERTICAL)
     }
 
+    private fun setupExternalStorageRecyclerView() = binding.rvPublicPhotos.apply {
+        adapter = externalStoragePhotoAdapter
+        layoutManager = StaggeredGridLayoutManager(3, RecyclerView.VERTICAL)
+    }
+
     private fun loadPhotosFromInternalStorageIntoRecyclerView() {
         lifecycleScope.launch {
             val photos = loadPhotoFromInternalStorage()
             internalStoragePhotoAdapter.submitList(photos)
+        }
+    }
+
+    private fun loadPhotosFromExternalStorageIntoRecyclerView() {
+        lifecycleScope.launch {
+            val photos = loadPhotosFromExternalStorage()
+            externalStoragePhotoAdapter.submitList(photos)
         }
     }
 
@@ -200,6 +278,10 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
             false
         }
+    }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        contentResolver.unregisterContentObserver(contentObserver)
     }
 }
