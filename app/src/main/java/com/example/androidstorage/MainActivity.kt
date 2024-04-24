@@ -1,16 +1,20 @@
 package com.example.androidstorage
 
 import android.Manifest
+import android.app.RecoverableSecurityException
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.launch
 import androidx.appcompat.app.AppCompatActivity
@@ -35,8 +39,12 @@ class MainActivity : AppCompatActivity() {
     private var readPermissionGranted = false
     private var writePermissionGranted = false
     private lateinit var permissionsLauncher: ActivityResultLauncher<Array<String>>
+    private lateinit var intentSenderLauncher: ActivityResultLauncher<IntentSenderRequest>
 
     private lateinit var contentObserver: ContentObserver
+
+    private var deletedImageUri: Uri? = null
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,9 +64,15 @@ class MainActivity : AppCompatActivity() {
         externalStoragePhotoAdapter = SharedPhotoAdapter {
 
         }
-
+        externalStoragePhotoAdapter = SharedPhotoAdapter {
+            lifecycleScope.launch {
+                deletePhotoFromExternalStorage(it.contentUri)
+                deletedImageUri = it.contentUri
+            }
+        }
         setupExternalStorageRecyclerView()
         initContentObserver()
+
 
         permissionsLauncher =
             registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
@@ -69,6 +83,14 @@ class MainActivity : AppCompatActivity() {
 
             }
         updateOrRequestPermissions()
+
+        intentSenderLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {
+            if(it.resultCode == RESULT_OK) {
+                Toast.makeText(this, "Photo deleted successfully", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Photo couldn't be deleted", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         val takePhoto = registerForActivityResult(ActivityResultContracts.TakePicturePreview()) {
             val isPrivate = binding.switchPrivate.isChecked
@@ -121,6 +143,26 @@ class MainActivity : AppCompatActivity() {
             true,
             contentObserver
         )
+    }
+
+    private suspend fun deletePhotoFromExternalStorage(photoUri: Uri) {
+        withContext(Dispatchers.IO) {
+            try {
+                contentResolver.delete(photoUri, null, null)
+            } catch (e: SecurityException) {
+                val intentSender = run {
+                    MediaStore.createDeleteRequest(
+                        contentResolver,
+                        listOf(photoUri)
+                    ).intentSender
+                }
+                intentSender?.let { sender ->
+                    intentSenderLauncher.launch(
+                        IntentSenderRequest.Builder(sender).build()
+                    )
+                }
+            }
+        }
     }
 
     private suspend fun loadPhotosFromExternalStorage(): List<SharedStoragePhoto> {
